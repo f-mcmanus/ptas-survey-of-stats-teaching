@@ -1,0 +1,192 @@
+---
+title: "Response Rate Calculations"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-04-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(janitor)
+library(tidyverse)
+```
+
+```clean_recruitment_tracker.rds``` - a spreadsheet used to track data collection which lists eligible departments to contact
+
+```clean_survey_data.rds``` - the survey responses from departments which completed the survey
+
+```{r load data, message = FALSE, results = FALSE}
+tracker_data <- read_rds(here("data/clean_data", "clean_recruitment_tracker.rds"))
+survey_data <- read_rds(here("data/clean_data", "clean_survey_data.rds"))
+```
+
+```{r examine data sets}
+head(tracker_data)
+head(survey_data)
+```
+
+
+### Which departments were contacted?
+
+Departments were either contacted with a survey link or an enquiry email asking who best to contact (or both). In each of these cases, contacted == "yes". The 'contacted' column is binary and describes whether departments were not contacted at all (contacted == "no") or were contacted *at least once* (response == "yes").
+
+```{r contacted}
+tracker_filt <- tracker_data %>%
+  mutate(contacted = case_when(
+    # Was the department contacted at least once? (yes/no)
+    enquiry_email == "no" & survey_link == "no" ~ "no",
+    enquiry_email == "yes" | survey_link == "yes" ~ "yes",
+    .default = NA)) %>%
+  select(university_id, discipline, completed_survey, contacted)
+```
+
+
+### Which departments responded to the survey?
+Survey_data lists all departments from which we received a response (response == "yes").
+
+```{r responded}
+survey_filt <- survey_data %>%
+  select(c(university_id, discipline)) %>%
+  mutate(response = "yes")
+```
+
+
+### Response rate calculations
+For all departments in tracker_data (list of eligible departments) but not in survey_data (survey_responses), response == "no".
+```{r join-contacted-response}
+response_data <-
+  full_join(tracker_filt, survey_filt, by = c("university_id","discipline")) %>%
+  mutate(response = case_when( 
+    # If a university is not listed in the survey data, then we did not receive a response
+    is.na(response) ~ "no", 
+    .default = response))
+```
+Remove departments which weren't contacted because another department with identical teaching had already been contacted.
+```{r remove-duplicates}
+response_filt <- response_data %>%
+  filter(
+    completed_survey != "same_as_bio" & 
+      completed_survey != "same_as_biomed") %>% 
+  select(-c(completed_survey, contacted)) %>% 
+  mutate(across(everything(), factor))
+```
+
+
+```{r calculate-response-rate}
+# Check survey responses for comparison
+response_by_discipline <- survey_data %>% 
+  select(university_id, discipline) %>% 
+  group_by(discipline) %>%
+  summarise(number_of_responses = n())
+
+# Response rate
+response_table <- response_filt %>% 
+  group_by(discipline) %>% 
+  count(response) %>% 
+  pivot_wider(names_from = response, values_from = n) %>% 
+  mutate(
+    total_by_discipline = yes + no,
+    percent_responded = round(100*(yes/total_by_discipline), 1)) %>%
+  ungroup()
+
+response_table <- response_table %>% 
+  rename(responded = yes,
+         contacted = total_by_discipline) %>% 
+  select(discipline, responded, contacted, percent_responded)
+```
+
+```{r response-table, echo = FALSE}
+knitr::kable(response_table)
+```
+
+
+### Shared teaching
+
+At some universities, biological and biomedical sciences share their core study design and data analysis teaching. It would not make sense to contact both departments, as the responses should be identical. Therefore, at universities where teaching is shared across two disciplines, we expected one response that would reflect teaching across both departments, effectively treating them as if they were one department. As with any other department, I may have contacted multiple staff members to increase the chance of getting a response, but once a response was received, any active survey links for that department were closed to avoid multiple responses. 
+
+When filling in the survey, participants were required to pick one discipline only. The disciplines in our survey data reflect the disciplines that the participants themselves chose. For example, if a staff member was asked to complete the survey for a course offered to biological and biomedical sciences students, and the staff member picked the biological sciences discipline, then that response is stored as a biological sciences response, even though teaching is identical across biological and biomedical sciences at that university. 
+
+The list of departments which share teaching is based on the impression of the course while collecting data, or based on information from a member of staff in that department (e.g. in response to a survey link or enquiry email). To the best of our knowledge, shared teaching only occurs across biological and biomedical sciences. When collecting the data, *completed_survey* in the *tracker_data* dataset indicates departments from which we did not require a response because we had already contacted another department that offered identical core study design and data analysis teaching (see *tracker_data$completed_survey*). For example, for a university which offers identical core teaching across biological and biomedical sciences, we may have contacted a staff member from the biological sciences department and would not then expect (or need) a response from the biomedical sciences department. In this case, "same as bio" in the *completed_survey* column indicates that no response was required from the biomedical sciences department at that university. Similarly, if a staff member from biomedical sciences had been contacted, this would have been indicated with “same as biomed” in the biological sciences column for that university.
+
+**tracker_data$completed_survey**
+
+- "yes":  we received a response for the survey
+- "no" - we did not receive a response for the survey
+- "same_as_bio": we did not need a response from biomedical sciences as teaching was shared across bio and biomed, and biological sciences had already been contacted
+- "same as biomed": we did not need a response from biological sciences as teaching was shared across bio and biomed, and biomedical sciences had already been contacted
+
+```{r shared teaching}
+unis_with_shared_teaching <- response_data %>%
+  filter(
+    completed_survey == "same_as_bio" | completed_survey == "same_as_biomed") %>%
+  # "shared" indicates that teaching in bio/biomed is shared at that university
+  mutate(shared_teaching = "shared") %>%
+  # the shared_teaching column will be used for merging data sets
+  select(university_id, shared_teaching)
+
+response_bio_biomed <- response_data %>%
+  filter(discipline == "Bio" | discipline == "Biomed") %>%
+  select(-completed_survey)
+
+shared_teaching_responses <- 
+  left_join(x = unis_with_shared_teaching,
+            y = response_bio_biomed,
+            by = join_by(university_id))
+
+# Number of universities which offer shared teaching for which we received a response
+num_shared_teaching_responses <- shared_teaching_responses %>%
+  select(-shared_teaching) %>%
+  filter(response == "yes") %>% 
+  nrow()
+```
+There are `r num_shared_teaching_responses` completed survey responses from universities which share teaching across Biological and Biomedical Sciences.
+
+Based on open box responses for question 2b ("We recognise that at some institutions, students in one discipline receive identical 
+training to students in another discipline. Please indicate here if this is the case and list the disciplines to which this applies"), we estimate that a further 7 universities offer shared teaching across biological sciences and biomedical sciences. In 3 of these responses, the participant selected biological sciences and in 4 responses they selected biomedical sciences.
+
+Overall, around **15** of our responses are from departments which share core teaching with another department (7 are classed as biological sciences and 8 are classed as biomedical sciences).
+
+
+```{r shared-teaching, message = FALSE}
+responses_with_shared_teaching <- 
+  full_join(x = response_filt, y = unis_with_shared_teaching, by = "university_id") %>%
+  mutate(
+    shared_teaching = case_when(
+      discipline %in% c("Psych", "Med") ~ "no",
+      .default = shared_teaching),
+    discipline = case_when(
+      shared_teaching == "shared" ~ "Bio/Biomed",
+      .default = discipline)) %>% 
+  select(-shared_teaching)
+
+```
+
+```{r shared-teaching-calcs}
+shared_response_table <- 
+  responses_with_shared_teaching %>% 
+  group_by(discipline) %>% 
+  count(response) %>% 
+  pivot_wider(names_from = response, values_from = n) %>% 
+  mutate(
+    total_by_discipline = yes + no,
+    percent_responded = round(100*(yes/total_by_discipline), 1)) %>%
+  ungroup()
+
+shared_response_table <- shared_response_table %>% 
+  rename(responded = yes, 
+         contacted = total_by_discipline) %>% 
+  select(discipline, responded, contacted, percent_responded)
+```
+
+```{r shared-table, echo = FALSE}
+knitr::kable(shared_response_table)
+```
+
+
+```{r save-table, include = FALSE}
+write.csv(response_table, here("data", "response_rate_table.csv"), row.names = FALSE)
+```
+

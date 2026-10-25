@@ -1,0 +1,75 @@
+---
+title: "q8_open_research"
+output: html_document
+date: "2024-08-23"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(pbapply)
+library(tidyverse)
+library(here)
+
+topic <- "open_research"
+```
+
+```{r load data}
+survey_data <- read_rds(here("data/clean_data", "clean_survey_data.rds"))
+```
+
+```{r load lists, include = FALSE}
+# sources models.R which creates all the lists
+source(here("R/analysis/q8_models.R"))
+```
+
+
+# Open Research
+
+### Prior checks
+```{r prior-checks}
+
+default_priors_list[[topic]]
+
+prior_contrasts_list[[topic]]
+
+prior_pc_list[[topic]]
+
+prior_effects_list[[topic]]
+```
+
+### Models
+```{r models}
+columns_by_topic <- survey_data %>% 
+  select(starts_with(str_glue("q8_{topic}"))) %>% 
+  names()
+
+pblapply(columns_by_topic, function(is_x_taught) {
+  
+  print(is_x_taught)
+  print(response_by_discipline_tables[[is_x_taught]])
+  
+  print("model summary")
+  print(model_summary_list[[is_x_taught]])
+  
+  print("probability estimates")
+  print(probability_estimates_list[[is_x_taught]])
+  
+  print("model plot")
+  print(model_plot_list[[is_x_taught]])
+  
+  print("post-predictive check")
+  print(pp_check_list[[is_x_taught]])
+  
+  print("conditional effects")
+  print(conditional_effects_list[[is_x_taught]])
+  
+  print("sensitivity analysis table")
+  print(sensitivity_analysis_list[[is_x_taught]])
+  
+  print("sensitivity analysis plot")
+  print(sensitivity_plot_list[[is_x_taught]])
+  
+  })
+```
+
